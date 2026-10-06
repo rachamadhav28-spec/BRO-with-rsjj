@@ -235,17 +235,20 @@ enum class BroState(val label: String) {
     ERROR("Error")
 }
 
-/** Left/right tilt of the phone from the accelerometer (no permission needed). */
+/** Phone tilt from the accelerometer (no permission needed): x = left/right, y = up/down. */
 @Composable
-private fun rememberTilt(): State<Float> {
+private fun rememberTilt(): State<Offset> {
     val context = LocalContext.current
-    val tilt = remember { mutableStateOf(0f) }
+    val tilt = remember { mutableStateOf(Offset.Zero) }
     DisposableEffect(Unit) {
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val sensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        var baseY: Float? = null
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
-                tilt.value = -event.values[0]
+                // the way you hold the phone when BRO opens counts as "level" for up/down
+                val by = baseY ?: event.values[1].also { baseY = it }
+                tilt.value = Offset(-event.values[0], event.values[1] - by)
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -280,26 +283,39 @@ fun BroOrb(state: BroState, height: Dp, modifier: Modifier = Modifier) {
         label = "wave"
     )
 
-    // The ball rolls left and right inside the box as the phone tilts.
+    // The ball rolls in every direction inside the box as the phone tilts.
     val tilt = rememberTilt()
-    var pos by remember { mutableFloatStateOf(0f) }
-    var vel by remember { mutableFloatStateOf(0f) }
+    var pos by remember { mutableStateOf(Offset.Zero) }
+    var vel by remember { mutableStateOf(Offset.Zero) }
     LaunchedEffect(Unit) {
         var last = withFrameNanos { it }
         while (true) {
             val now = withFrameNanos { it }
             val dt = ((now - last) / 1_000_000_000f).coerceAtMost(0.05f)
             last = now
-            vel = (vel + tilt.value * 0.35f * dt) * (1f - 1.5f * dt)
-            pos += vel * dt
-            if (pos > 1f) {
-                pos = 1f
-                vel = -vel * 0.45f
+            val tl = tilt.value
+            var vx = (vel.x + tl.x * 0.35f * dt) * (1f - 1.5f * dt)
+            var vy = (vel.y + tl.y * 0.35f * dt) * (1f - 1.5f * dt)
+            var px = pos.x + vx * dt
+            var py = pos.y + vy * dt
+            if (px > 1f) {
+                px = 1f
+                vx = -vx * 0.45f
             }
-            if (pos < -1f) {
-                pos = -1f
-                vel = -vel * 0.45f
+            if (px < -1f) {
+                px = -1f
+                vx = -vx * 0.45f
             }
+            if (py > 1f) {
+                py = 1f
+                vy = -vy * 0.45f
+            }
+            if (py < -1f) {
+                py = -1f
+                vy = -vy * 0.45f
+            }
+            vel = Offset(vx, vy)
+            pos = Offset(px, py)
         }
     }
 
@@ -333,11 +349,13 @@ fun BroOrb(state: BroState, height: Dp, modifier: Modifier = Modifier) {
  * Voice-style orb: a soft glowing blob that breathes and morphs, built
  * from three blurred layers that swirl inside each other.
  */
-private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Float) {
+private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Offset) {
     val p2 = drop * 2f * PI.toFloat()
-    val r = size.height * 0.30f * (1f + 0.06f * sin(wave))
-    val travel = (size.width / 2f - r * 1.4f).coerceAtLeast(0f)
-    val c = Offset(size.width / 2f + pos * travel, size.height * 0.5f)
+    val r = size.height * 0.22f * (1f + 0.06f * sin(wave))
+    val pad = r * 1.4f
+    val travelX = (size.width / 2f - pad).coerceAtLeast(0f)
+    val travelY = (size.height / 2f - pad).coerceAtLeast(0f)
+    val c = Offset(size.width / 2f + pos.x * travelX, size.height / 2f + pos.y * travelY)
 
     fun blobPath(rad: Float, amp: Float, ph: Float, ph2: Float): Path {
         val path = Path()
@@ -367,7 +385,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Float
     )
 
     // body
-    val body = blobPath(r * 1.08f, 0.05f, wave, p2)
+    val body = blobPath(r * 1.08f, 0.025f, wave, p2)
     drawPath(
         path = body,
         brush = Brush.radialGradient(
@@ -385,7 +403,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Float
     val swirl = Offset(c.x + cos(p2) * r * 0.25f, c.y + sin(p2) * r * 0.25f)
     rotate(degrees = spin, pivot = c) {
         drawPath(
-            path = blobPath(r * 0.95f, 0.06f, -wave, 2f * p2),
+            path = blobPath(r * 0.95f, 0.03f, -wave, 2f * p2),
             brush = Brush.radialGradient(
                 colors = listOf(Color.White.copy(alpha = 0.55f), BroColors.Cyan.copy(alpha = 0.25f), Color.Transparent),
                 center = swirl,
@@ -397,7 +415,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Float
     // bright core
     rotate(degrees = -spin * 1.5f, pivot = c) {
         drawPath(
-            path = blobPath(r * 0.75f, 0.07f, 2f * wave, -p2),
+            path = blobPath(r * 0.75f, 0.035f, 2f * wave, -p2),
             brush = Brush.radialGradient(
                 colors = listOf(Color.White.copy(alpha = 0.80f), Color.Transparent),
                 center = c,
