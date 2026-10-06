@@ -77,6 +77,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 import org.json.JSONArray
 import org.json.JSONObject
@@ -260,13 +261,14 @@ fun BroOrb(state: BroState, height: Dp, modifier: Modifier = Modifier) {
 }
 
 /**
- * Water orb: a drop forms on the tap, falls into the orb, the water rocks
- * and ripples spread, while two pairs of rings rotate around it.
+ * Liquid orb: the outline breathes like a water bubble, waves flow and
+ * slosh inside it, and two pairs of rings rotate around it.
  */
 private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float) {
-    val c = Offset(size.width / 2f, size.height * 0.58f)
-    val r = minOf(size.width, size.height) * 0.25f
+    val c = Offset(size.width / 2f, size.height * 0.52f)
+    val r = minOf(size.width, size.height) * 0.27f
     val ir = r * 0.95f
+    val p2 = drop * 2f * PI.toFloat()
 
     // soft glow
     drawCircle(
@@ -299,90 +301,86 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float) {
     ring(r * 1.48f, -spin * 1.6f, 150f, 3f, BroColors.Violet.copy(alpha = 0.85f))
     ring(r * 1.48f, -spin * 1.6f + 200f, 40f, 3f, BroColors.Cyan.copy(alpha = 0.7f))
 
-    // water state
-    val level = c.y + ir * 0.12f
-    val impact = if (drop > 0.5f) (drop - 0.5f) * 2f else 0f
-    val kick = if (drop > 0.5f) (1f - impact) * (1f - impact) else 0f
-    val amp = ir * 0.035f + ir * 0.11f * kick
+    // wobbling liquid outline
+    val blob = Path()
+    val n = 72
+    for (i in 0..n) {
+        val a = i * 2f * PI.toFloat() / n
+        val k = 1f + 0.040f * sin(2f * a + wave) +
+            0.030f * sin(3f * a - wave) +
+            0.020f * sin(5f * a + 2f * wave + p2)
+        val x = c.x + cos(a) * ir * k
+        val y = c.y + sin(a) * ir * k
+        if (i == 0) blob.moveTo(x, y) else blob.lineTo(x, y)
+    }
+    blob.close()
 
-    fun wavePath(phase: Float, a: Float): Path {
+    drawPath(
+        path = blob,
+        brush = Brush.radialGradient(
+            colors = listOf(Color(0xFF12305A), Color(0xFF070F20)),
+            center = c,
+            radius = ir * 1.1f
+        )
+    )
+
+    // flowing water inside
+    val base = c.y + ir * 0.10f + sin(wave) * ir * 0.04f
+    val tilt = sin(p2) * ir * 0.35f
+
+    fun wavePath(phase: Float, a: Float, tl: Float): Path {
         val p = Path()
         val steps = 48
-        p.moveTo(c.x - ir, c.y + ir)
+        val left = c.x - ir * 1.1f
+        val bottom = c.y + ir * 1.1f
+        p.moveTo(left, bottom)
         for (i in 0..steps) {
-            val x = c.x - ir + (2f * ir) * i / steps
-            val y = level + sin(i * 0.30f + phase) * a
+            val fx = i / steps.toFloat()
+            val x = left + fx * ir * 2.2f
+            val y = base + (fx - 0.5f) * tl + sin(i * 0.28f + phase) * a
             p.lineTo(x, y)
         }
-        p.lineTo(c.x + ir, c.y + ir)
+        p.lineTo(c.x + ir * 1.1f, bottom)
         p.close()
         return p
     }
 
-    val clip = Path().apply { addOval(Rect(center = c, radius = ir)) }
-    clipPath(clip) {
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF0B1730), Color(0xFF060C18)),
-                startY = c.y - ir,
-                endY = c.y + ir
-            ),
-            topLeft = Offset(c.x - ir, c.y - ir),
-            size = Size(ir * 2f, ir * 2f)
-        )
+    clipPath(blob) {
         drawPath(
-            path = wavePath(wave + 2f, amp * 0.8f),
+            path = wavePath(wave + 2.2f, ir * 0.07f, tilt * 0.7f),
             brush = Brush.verticalGradient(
-                colors = listOf(BroColors.Blue.copy(alpha = 0.55f), BroColors.Violet.copy(alpha = 0.35f)),
-                startY = level - amp,
+                colors = listOf(BroColors.Violet.copy(alpha = 0.45f), BroColors.Blue.copy(alpha = 0.35f)),
+                startY = base - ir * 0.2f,
                 endY = c.y + ir
             )
         )
         drawPath(
-            path = wavePath(wave, amp),
+            path = wavePath(wave, ir * 0.09f, tilt),
             brush = Brush.verticalGradient(
                 colors = listOf(BroColors.Cyan.copy(alpha = 0.85f), BroColors.Blue.copy(alpha = 0.5f)),
-                startY = level - amp,
+                startY = base - ir * 0.2f,
                 endY = c.y + ir
             )
         )
-        // ripples spreading on the surface after the drop lands
-        for (k in 0..2) {
-            val p = (impact - k * 0.15f) / (1f - k * 0.15f)
-            if (p > 0f && p < 1f) {
-                drawOval(
-                    color = Color.White.copy(alpha = 0.55f * (1f - p)),
-                    topLeft = Offset(c.x - ir * 0.95f * p, level - ir * 0.13f * p),
-                    size = Size(ir * 1.9f * p, ir * 0.26f * p),
-                    style = Stroke(2.5f)
-                )
-            }
-        }
-    }
-    drawCircle(color = BroColors.Cyan.copy(alpha = 0.65f), radius = ir, center = c, style = Stroke(3f))
-
-    // tap and falling drop
-    val tapY = c.y - r * 1.78f
-    drawRoundRect(
-        color = Color(0xFF2B3A55),
-        topLeft = Offset(c.x - r * 0.09f, tapY - r * 0.12f),
-        size = Size(r * 0.18f, r * 0.12f),
-        cornerRadius = CornerRadius(8f, 8f)
-    )
-    if (drop <= 0.5f) {
-        val p = drop / 0.5f
-        val swell = minOf(1f, p / 0.18f)
-        val fall = if (p < 0.18f) 0f else (p - 0.18f) / 0.82f
-        val y = tapY + (level - tapY) * fall * fall
+        drawPath(
+            path = wavePath(1f - wave, ir * 0.05f, -tilt * 0.5f),
+            color = BroColors.Cyan.copy(alpha = 0.22f)
+        )
+        // glossy highlight
+        val hl = Offset(c.x - ir * 0.35f, c.y - ir * 0.45f)
         drawCircle(
-            color = BroColors.Cyan,
-            radius = r * 0.035f * (0.4f + 0.6f * swell),
-            center = Offset(c.x, y)
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White.copy(alpha = 0.28f), Color.Transparent),
+                center = hl,
+                radius = ir * 0.55f
+            ),
+            radius = ir * 0.55f,
+            center = hl
         )
     }
+
+    drawPath(path = blob, color = BroColors.Cyan.copy(alpha = 0.7f), style = Stroke(3f))
 }
-
-
 
 enum class Screen { CHAT, HISTORY, SETTINGS }
 
