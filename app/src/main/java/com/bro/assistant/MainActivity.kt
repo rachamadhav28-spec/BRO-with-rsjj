@@ -351,7 +351,7 @@ fun BroOrb(state: BroState, height: Dp, modifier: Modifier = Modifier) {
  */
 private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Offset) {
     val p2 = drop * 2f * PI.toFloat()
-    val r = size.height * 0.22f * (1f + 0.06f * sin(wave))
+    val r = size.height * 0.22f
     val pad = r * 1.4f
     val travelX = (size.width / 2f - pad).coerceAtLeast(0f)
     val travelY = (size.height / 2f - pad).coerceAtLeast(0f)
@@ -359,7 +359,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Offse
 
     fun blobPath(rad: Float, amp: Float, ph: Float, ph2: Float): Path {
         val path = Path()
-        val n = 72
+        val n = 120
         for (i in 0..n) {
             val a = i * 2f * PI.toFloat() / n
             val k = 1f + amp * sin(2f * a + ph) +
@@ -385,7 +385,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Offse
     )
 
     // body
-    val body = blobPath(r * 1.08f, 0.025f, wave, p2)
+    val body = blobPath(r * 1.08f, 0f, wave, p2)
     drawPath(
         path = body,
         brush = Brush.radialGradient(
@@ -403,7 +403,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Offse
     val swirl = Offset(c.x + cos(p2) * r * 0.25f, c.y + sin(p2) * r * 0.25f)
     rotate(degrees = spin, pivot = c) {
         drawPath(
-            path = blobPath(r * 0.95f, 0.03f, -wave, 2f * p2),
+            path = blobPath(r * 0.95f, 0f, -wave, 2f * p2),
             brush = Brush.radialGradient(
                 colors = listOf(Color.White.copy(alpha = 0.55f), BroColors.Cyan.copy(alpha = 0.25f), Color.Transparent),
                 center = swirl,
@@ -415,7 +415,7 @@ private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Offse
     // bright core
     rotate(degrees = -spin * 1.5f, pivot = c) {
         drawPath(
-            path = blobPath(r * 0.75f, 0.035f, 2f * wave, -p2),
+            path = blobPath(r * 0.75f, 0f, 2f * wave, -p2),
             brush = Brush.radialGradient(
                 colors = listOf(Color.White.copy(alpha = 0.80f), Color.Transparent),
                 center = c,
