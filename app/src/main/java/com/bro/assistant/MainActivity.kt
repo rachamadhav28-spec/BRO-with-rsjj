@@ -77,6 +77,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
 import kotlin.math.PI
+import android.content.pm.ActivityInfo
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.platform.LocalConfiguration
 import kotlin.math.cos
 import kotlin.math.sin
 import org.json.JSONArray
@@ -87,6 +97,7 @@ import org.json.JSONObject
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
@@ -224,6 +235,29 @@ enum class BroState(val label: String) {
     ERROR("Error")
 }
 
+/** Left/right tilt of the phone from the accelerometer (no permission needed). */
+@Composable
+private fun rememberTilt(): State<Float> {
+    val context = LocalContext.current
+    val tilt = remember { mutableStateOf(0f) }
+    DisposableEffect(Unit) {
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                tilt.value = -event.values[0]
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (sensor != null) {
+            sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }
+        onDispose { sm.unregisterListener(listener) }
+    }
+    return tilt
+}
+
 @Composable
 fun BroOrb(state: BroState, height: Dp, modifier: Modifier = Modifier) {
     val t = rememberInfiniteTransition(label = "orb")
@@ -246,140 +280,133 @@ fun BroOrb(state: BroState, height: Dp, modifier: Modifier = Modifier) {
         label = "wave"
     )
 
-    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Canvas(Modifier.fillMaxWidth().height(height)) {
-            drawNavi(spin, drop, wave)
+    // The ball rolls left and right inside the box as the phone tilts.
+    val tilt = rememberTilt()
+    var pos by remember { mutableFloatStateOf(0f) }
+    var vel by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            val dt = ((now - last) / 1_000_000_000f).coerceAtMost(0.05f)
+            last = now
+            vel = (vel + tilt.value * 0.35f * dt) * (1f - 1.5f * dt)
+            pos += vel * dt
+            if (pos > 1f) {
+                pos = 1f
+                vel = -vel * 0.45f
+            }
+            if (pos < -1f) {
+                pos = -1f
+                vel = -vel * 0.45f
+            }
+        }
+    }
+
+    val shape = RoundedCornerShape(24.dp)
+    Column(
+        modifier.fillMaxWidth().padding(horizontal = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(height)
+                .clip(shape)
+                .background(Color(0x1422D3EE))
+                .border(1.dp, BroColors.Cyan.copy(alpha = 0.4f), shape)
+        ) {
+            drawNavi(spin, drop, wave, pos)
         }
         Text(
             text = state.label,
             color = BroColors.Cyan,
             fontSize = 20.sp,
             fontWeight = FontWeight.Medium,
-            letterSpacing = 2.sp
+            letterSpacing = 2.sp,
+            modifier = Modifier.padding(top = 6.dp)
         )
     }
 }
 
 /**
- * Liquid orb: the outline breathes like a water bubble, waves flow and
- * slosh inside it, and two pairs of rings rotate around it.
+ * Voice-style orb: a soft glowing blob that breathes and morphs, built
+ * from three blurred layers that swirl inside each other.
  */
-private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float) {
-    val c = Offset(size.width / 2f, size.height * 0.52f)
-    val r = minOf(size.width, size.height) * 0.27f
-    val ir = r * 0.95f
+private fun DrawScope.drawNavi(spin: Float, drop: Float, wave: Float, pos: Float) {
     val p2 = drop * 2f * PI.toFloat()
+    val r = size.height * 0.30f * (1f + 0.06f * sin(wave))
+    val travel = (size.width / 2f - r * 1.4f).coerceAtLeast(0f)
+    val c = Offset(size.width / 2f + pos * travel, size.height * 0.5f)
 
-    // soft glow
+    fun blobPath(rad: Float, amp: Float, ph: Float, ph2: Float): Path {
+        val path = Path()
+        val n = 72
+        for (i in 0..n) {
+            val a = i * 2f * PI.toFloat() / n
+            val k = 1f + amp * sin(2f * a + ph) +
+                amp * 0.7f * sin(3f * a - ph2) +
+                amp * 0.4f * sin(4f * a + ph + ph2)
+            val x = c.x + cos(a) * rad * k
+            val y = c.y + sin(a) * rad * k
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+        return path
+    }
+
+    // pulsing halo
     drawCircle(
         brush = Brush.radialGradient(
-            colors = listOf(BroColors.Cyan.copy(alpha = 0.22f), Color.Transparent),
+            colors = listOf(BroColors.Cyan.copy(alpha = 0.22f + 0.10f * sin(wave)), Color.Transparent),
             center = c,
-            radius = r * 2f
+            radius = r * 2.1f
         ),
-        radius = r * 2f,
+        radius = r * 2.1f,
         center = c
     )
 
-    // rotating rings
-    fun ring(rad: Float, deg: Float, sweep: Float, w: Float, color: Color) {
-        rotate(degrees = deg, pivot = c) {
-            drawArc(
-                color = color,
-                startAngle = 0f,
-                sweepAngle = sweep,
-                useCenter = false,
-                topLeft = Offset(c.x - rad, c.y - rad),
-                size = Size(rad * 2f, rad * 2f),
-                style = Stroke(width = w, cap = StrokeCap.Round)
-            )
-        }
-    }
-    drawCircle(color = BroColors.Cyan.copy(alpha = 0.10f), radius = r * 1.28f, center = c, style = Stroke(1.5f))
-    ring(r * 1.28f, spin, 110f, 5f, BroColors.Cyan)
-    ring(r * 1.28f, spin + 180f, 50f, 5f, BroColors.Blue)
-    ring(r * 1.48f, -spin * 1.6f, 150f, 3f, BroColors.Violet.copy(alpha = 0.85f))
-    ring(r * 1.48f, -spin * 1.6f + 200f, 40f, 3f, BroColors.Cyan.copy(alpha = 0.7f))
-
-    // wobbling liquid outline
-    val blob = Path()
-    val n = 72
-    for (i in 0..n) {
-        val a = i * 2f * PI.toFloat() / n
-        val k = 1f + 0.040f * sin(2f * a + wave) +
-            0.030f * sin(3f * a - wave) +
-            0.020f * sin(5f * a + 2f * wave + p2)
-        val x = c.x + cos(a) * ir * k
-        val y = c.y + sin(a) * ir * k
-        if (i == 0) blob.moveTo(x, y) else blob.lineTo(x, y)
-    }
-    blob.close()
-
+    // body
+    val body = blobPath(r * 1.08f, 0.05f, wave, p2)
     drawPath(
-        path = blob,
+        path = body,
         brush = Brush.radialGradient(
-            colors = listOf(Color(0xFF12305A), Color(0xFF070F20)),
+            colors = listOf(
+                BroColors.Cyan.copy(alpha = 0.90f),
+                BroColors.Blue.copy(alpha = 0.60f),
+                BroColors.Violet.copy(alpha = 0.15f)
+            ),
             center = c,
-            radius = ir * 1.1f
+            radius = r * 1.15f
         )
     )
 
-    // flowing water inside
-    val base = c.y + ir * 0.10f + sin(wave) * ir * 0.04f
-    val tilt = sin(p2) * ir * 0.35f
-
-    fun wavePath(phase: Float, a: Float, tl: Float): Path {
-        val p = Path()
-        val steps = 48
-        val left = c.x - ir * 1.1f
-        val bottom = c.y + ir * 1.1f
-        p.moveTo(left, bottom)
-        for (i in 0..steps) {
-            val fx = i / steps.toFloat()
-            val x = left + fx * ir * 2.2f
-            val y = base + (fx - 0.5f) * tl + sin(i * 0.28f + phase) * a
-            p.lineTo(x, y)
-        }
-        p.lineTo(c.x + ir * 1.1f, bottom)
-        p.close()
-        return p
-    }
-
-    clipPath(blob) {
+    // swirling inner light
+    val swirl = Offset(c.x + cos(p2) * r * 0.25f, c.y + sin(p2) * r * 0.25f)
+    rotate(degrees = spin, pivot = c) {
         drawPath(
-            path = wavePath(wave + 2.2f, ir * 0.07f, tilt * 0.7f),
-            brush = Brush.verticalGradient(
-                colors = listOf(BroColors.Violet.copy(alpha = 0.45f), BroColors.Blue.copy(alpha = 0.35f)),
-                startY = base - ir * 0.2f,
-                endY = c.y + ir
-            )
-        )
-        drawPath(
-            path = wavePath(wave, ir * 0.09f, tilt),
-            brush = Brush.verticalGradient(
-                colors = listOf(BroColors.Cyan.copy(alpha = 0.85f), BroColors.Blue.copy(alpha = 0.5f)),
-                startY = base - ir * 0.2f,
-                endY = c.y + ir
-            )
-        )
-        drawPath(
-            path = wavePath(1f - wave, ir * 0.05f, -tilt * 0.5f),
-            color = BroColors.Cyan.copy(alpha = 0.22f)
-        )
-        // glossy highlight
-        val hl = Offset(c.x - ir * 0.35f, c.y - ir * 0.45f)
-        drawCircle(
+            path = blobPath(r * 0.95f, 0.06f, -wave, 2f * p2),
             brush = Brush.radialGradient(
-                colors = listOf(Color.White.copy(alpha = 0.28f), Color.Transparent),
-                center = hl,
-                radius = ir * 0.55f
-            ),
-            radius = ir * 0.55f,
-            center = hl
+                colors = listOf(Color.White.copy(alpha = 0.55f), BroColors.Cyan.copy(alpha = 0.25f), Color.Transparent),
+                center = swirl,
+                radius = r
+            )
         )
     }
 
-    drawPath(path = blob, color = BroColors.Cyan.copy(alpha = 0.7f), style = Stroke(3f))
+    // bright core
+    rotate(degrees = -spin * 1.5f, pivot = c) {
+        drawPath(
+            path = blobPath(r * 0.75f, 0.07f, 2f * wave, -p2),
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White.copy(alpha = 0.80f), Color.Transparent),
+                center = c,
+                radius = r * 0.75f
+            )
+        )
+    }
+
+    drawPath(path = body, color = BroColors.Cyan.copy(alpha = 0.35f), style = Stroke(2f))
 }
 
 enum class Screen { CHAT, HISTORY, SETTINGS }
@@ -416,6 +443,7 @@ private fun ChatScreen(vm: ChatViewModel, onHistory: () -> Unit, onSettings: () 
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
 
     LaunchedEffect(vm.messages.size) {
         if (vm.messages.isNotEmpty()) listState.animateScrollToItem(vm.messages.lastIndex)
@@ -435,7 +463,7 @@ private fun ChatScreen(vm: ChatViewModel, onHistory: () -> Unit, onSettings: () 
             }
         }
 
-        BroOrb(state = BroState.IDLE, height = if (imeUp) 130.dp else 280.dp)
+        BroOrb(state = BroState.IDLE, height = if (imeUp) 130.dp else screenH * 0.25f)
 
         LazyColumn(
             state = listState,
